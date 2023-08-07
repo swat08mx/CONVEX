@@ -1,4 +1,4 @@
-Authors: Ujjwal Singh, Ranjana M Raju, Dr. Prashanth Survajhala
+Authors: Ujjwal Singh, Ranjana M Raju, Dr. Prashanth N SurAvajhala
 
 System Genomics Lab, Amrita School of Biotechnology, Kollam, Kerala
 # Validated Variant Detection Program to find Causal Pathogenicity 
