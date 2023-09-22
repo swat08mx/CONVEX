@@ -1,0 +1,142 @@
+#!/bin/bash
+
+a=$SECONDS
+
+$read1 = $ARGV[0]
+$read2 = $ARGV[1]
+
+echo "started ...... "
+bowtie2 -x /home/ngs/Data/hg38/hg38 -1 read1 -2 read2 -S output.sam
+echo "bowtie completed"
+
+samtools view S2.out.sam -o output.bam
+echo "bam file created"
+
+samtools sort S2.out.bam -o output.sorted.bam
+samtools index S_sorted.bam -o output.sorted.bam.bai &
+echo "samtools indexing done"
+
+java -jar /home/NGS/ujjwal/picard/picard.jar MarkDuplicates I=output.sorted.bam O=output_marked_duplicates.bam M=marked_dup_metrics.txt
+echo "picard tools completed"
+
+bcftools mpileup S2.sorted.bam -o output.mpileup.bam
+
+# Varscan
+echo "Calling variants using Varscan .........."
+
+varscan mpileup2snp output.mpileup.bam > output.varscan.snp.vcf
+#varscan mpileup2snp S.mpileup.bam > S2.mpileup.snps
+
+varscan mpileup2indel output.mpileup.bam > output.varscan.indel.vcf
+#varscam mpileup2indel S.mipleup.bam > S2.mpileup.indels
+
+echo "Varscan completed"
+
+# Bcftools
+echo "Calling variants using Bcftools .........."
+
+bcftools mpileup -Ou -f /home/ngs/Data/hg38/hg38.fa output.sorted.bam | bcftools call -mv -Ob -o output.bcftools.bcf
+bcftools view output.bcftools.bcf > ouput.bcftools.vcf
+
+echo "Bcftools completed"
+
+
+# VT
+#echo "Calling variants using VT .........."
+
+#vt not reading mpilup data
+
+#/home/NGS/tools/vt/vt discover -b output.sorted.bam -s Systm_Genomics_lab -r /home/ngs/Data/hg38/hg38.fa -i 20 -o output.vt.vcf
+
+#echo "VT completed"
+
+
+
+# Freebayes 
+echo "Calling variants using Freebayes .........."
+
+freebayes -f /home/NGS/tools/hg38/hg38.fa output.sorted.bam > output.freebayes.vcf
+
+echo "Freebayes completed"
+
+echo "Sorting varscan and bcftools chromosome wise"
+awk '$1 ~ /^#/ {print $0;next} {print $0 | "sort -k1,1V -k2,2n"}' output.varscan.vcf > varscan.sorted.vcf
+awk '$1 ~ /^#/ {print $0;next} {print $0 | "sort -k1,1V -k2,2n"}' output.bcftools.vcf > bcftools.sorted.vcf
+
+
+echo " Consensus Calling"
+
+echo 'File input recived'
+echo 'Count of varscan variants:'
+wc -l output.varscan.vcf
+echo 'Count of bcftools variants:'
+wc -l output.bcftools.vcf
+#echo 'Count of vt variants:'
+#wc -l output.vt.vcf
+echo "Count of freebayes variants"
+wc -l output.freebayes.vcf
+
+mkdir output_files
+cd output_files
+
+echo 'Comparing Varscan,bcftools,vt and Freebayes'
+
+awk 'NR == FNR {a[$1 $2 $5];next} $1 $2 $5 in a' ../output.varscan.sorted.vcf ../output.bcftools.sorted.vcf > output_var_bcf.vcf
+awk 'NR == FNR {a[$1 $2 $5];next} $1 $2 $5 in a' output_var_bcf.vcf ../output.vt.sorted.vcf > output_var_bcf_vt.vcf
+awk 'NR == FNR {a[$1 $2 $5];next} $1 $2 $5 in a' output_var_bcf_vt.vcf ../output.freebayes.vcf > output_final_consensus_variants.vcf
+
+echo 'Final number of consensus variants are: '
+awk '!/^#/' output_final_consensus_variants.vcf | wc -l
+
+# Variant annotation
+perl /home/NGS/tools/annovar/convert2annovar.pl -format vcf4 output_final_consensus_variants.vcf > output.avinput
+perl /home/NGS/tools/annovar/annotate_variation.pl -geneanno -buildver hg38 output.avinput /home/NGS/tools/annovar/humandb/
+
+echo 'variant annotation completed'
+
+# Clinvar
+
+echo "Finding valid Clinvar variant id's corresponding to the consensus"
+
+mkdir clinvarResults
+cd clinvarResults
+
+awk 'NR == FNR {a[$1,$2,$4,$5];next} (("chr"$1,$2,$4,$5) in a)' ../output_final_consensus_variants.vcf /home/NGS/tools/clinvar_20230520.vcf > output_validated_clinvar_variants.vcf
+
+
+echo "Total number of validated Clinvar entries corresponding to your list of variants is:"
+awk '!/^#/' output_validated_clinvar_variants.vcf | wc -l
+
+echo "Downstream Pathgenicity Analysis"
+
+grep -w 'CLNSIG' output_validated_clinvar_variants.vcf > output_clnid_available.vcf
+
+#grep -w 'CLNSIG=Pathogenic' output_clnid_available.vcf > output_pathogenic_variants.vcf
+echo "Number of pathogenic variants"
+awk '!/^#/' output_pathogenic_variants.vcf | wc -l
+
+grep -w 'CLNSIG=Likely_pathogenic' output_clnid_available.vcf > output_likely_pathogenic_variants.vcf
+echo "Number of likely pathogenic variants"
+awk '!/^#/' output_likely_pathogenic_variants.vcf | wc -l
+
+grep -w 'CLNSIG=Pathogenic/Likely_pathogenic' output_clnid_available.vcf > output_pathogenic_and_likely_pathogenic.vcf
+echo "Number of variants having tag pathogenic/likely_pathogenic"
+awk '!/^#/' output_pathogenic_and_likely_pathogenic.vcf | wc -l
+
+grep -w 'CLNSIG=Uncertain_significance' output_clnid_available.vcf > output_uncertain_significance_variants.vcf
+echo "Number of variants of uncertain significance variants"
+awk '!/^#/' output_uncertain_significance_variants.vcf | wc -l
+
+grep -w 'CLNSIG=Conflicting_interpretations_of_pathogenicity' output_clnid_available.vcf > output_conflicting_variants.vcf
+echo "Number of variants of conflicting pathogenicity"
+awk '!/^#/' output_conflicting_variants.vcf | wc -l
+
+
+echo "Congratulations! the pipeline ran successfully"
+echo "Total number of validated Clinvar entries corresponding to your list of variants is:"
+wc -l output_validated_clinvar_variants.vcf
+
+echo 'Finished'
+
+echo "Time taken: $(($duration / 60)) minutes and $(($duration % 60)) seconds."
+
